@@ -46,38 +46,52 @@ class SafeGuardVpnService : VpnService() {
     }
 
     private fun runVpn() {
-        try {
-            tun = Builder()
-                .setSession("SafeGuard")
-                .setMtu(1500)
-                .addAddress("10.111.222.2", 32)
-                .addDnsServer("10.111.222.1")
-                .addRoute("10.111.222.1", 32)
-                .establish()
-            val fd = tun ?: return
-            val input = FileInputStream(fd.fileDescriptor)
-            val output = FileOutputStream(fd.fileDescriptor)
-            val packetBuffer = ByteArray(32767)
-            while (running.get()) {
-                val length = input.read(packetBuffer)
-                if (length <= 0) continue
-                diagnostics.edit().putLong("last_heartbeat", System.currentTimeMillis()).apply()
-                val response = processDnsPacket(packetBuffer.copyOf(length))
-                if (response != null) synchronized(output) { output.write(response) }
+        while (running.get()) {
+            try {
+                tun = Builder()
+                    .setSession("SafeGuard")
+                    .setMtu(1500)
+                    .addAddress("10.111.222.2", 32)
+                    .addDnsServer("10.111.222.1")
+                    .addRoute("10.111.222.1", 32)
+                    .establish()
+                val fd = tun ?: throw IllegalStateException("Android לא אישר יצירת חיבור VPN")
+                val input = FileInputStream(fd.fileDescriptor)
+                val output = FileOutputStream(fd.fileDescriptor)
+                val packetBuffer = ByteArray(32767)
+                while (running.get()) {
+                    val length = input.read(packetBuffer)
+                    if (length <= 0) continue
+                    diagnostics.edit().putLong("last_heartbeat", System.currentTimeMillis()).apply()
+                    val response = processDnsPacket(packetBuffer.copyOf(length))
+                    if (response != null) synchronized(output) { output.write(response) }
+                }
+            } catch (error: Exception) {
+                if (running.get()) {
+                    diagnostics.edit()
+                        .putLong("last_error_time", System.currentTimeMillis())
+                        .putString("last_error", "${error.javaClass.simpleName}: ${error.message ?: "ללא פרטים"}")
+                        .apply()
+                }
+            } finally {
+                try { tun?.close() } catch (_: Exception) {}
+                tun = null
             }
-        } catch (error: Exception) {
-            diagnostics.edit()
-                .putLong("last_error_time", System.currentTimeMillis())
-                .putString("last_error", "${error.javaClass.simpleName}: ${error.message ?: "ללא פרטים"}")
-                .apply()
-        } finally {
-            diagnostics.edit().putLong("last_stop", System.currentTimeMillis()).apply()
-            running.set(false)
-            try { tun?.close() } catch (_: Exception) {}
-            tun = null
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
+
+            // נסה להתחבר מחדש במקום לכבות את ההגנה לאחר שגיאה זמנית.
+            if (running.get()) {
+                try { Thread.sleep(2000) } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    break
+                }
+            }
         }
+        diagnostics.edit().putLong("last_stop", System.currentTimeMillis()).apply()
+        running.set(false)
+        try { tun?.close() } catch (_: Exception) {}
+        tun = null
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     private fun processDnsPacket(packet: ByteArray): ByteArray? {
