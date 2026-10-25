@@ -1,0 +1,35 @@
+name: SongFlow Free checks
+
+on:
+  push:
+    paths:
+      - "song-agent-free/**"
+      - ".github/workflows/song-agent-free-ci.yml"
+  pull_request:
+    paths:
+      - "song-agent-free/**"
+      - ".github/workflows/song-agent-free-ci.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: song-agent-free
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: song-agent-free/requirements.txt
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+      - name: Check Python syntax
+        run: python -m compileall -q main.py
+      - name: Build Docker image
+        run: docker build -t songflow-free:ci .
