@@ -55,7 +55,7 @@ class MainActivity : Activity() {
         val input = EditText(this).apply {
             hint = "Domain, e.g. example.com"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            singleLine = true
+            isSingleLine = true
         }
         content.addView(input)
         content.addView(Button(this).apply {
@@ -87,7 +87,7 @@ class MainActivity : Activity() {
         val urlInput = EditText(this).apply {
             hint = "https://example.com/page"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
-            singleLine = true
+            isSingleLine = true
         }
         content.addView(urlInput)
         content.addView(Button(this).apply {
