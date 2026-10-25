@@ -5,7 +5,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
     <application
         android:allowBackup="false"
-        android:label="SafeGuard"
+        android:label="SafeGuard – הגנה בטוחה"
+        android:icon="@drawable/ic_safeguard"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:supportsRtl="true">
         <activity
