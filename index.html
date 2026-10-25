@@ -47,7 +47,9 @@
     }
     function saveDomains(domains) { localStorage.setItem(KEY, JSON.stringify(domains)); }
     function normalizeDomain(value) {
-      return value.trim().toLowerCase().replace(/^https?:\\/\\//, "").split(/[\\/?#]/)[0].replace(/^www\\./, "");
+      const candidate = value.trim().toLowerCase();
+      const parsed = new URL(candidate.includes("://") ? candidate : "https://" + candidate);
+      return parsed.hostname.replace(/^www[.]/, "");
     }
     function render() {
       const domains = getDomains();
@@ -75,8 +77,10 @@
     }
     document.querySelector("#add-form").addEventListener("submit", event => {
       event.preventDefault();
-      const domain = normalizeDomain(domainInput.value);
-      if (!domain || !domain.includes(".") || /\\s/.test(domain)) {
+      let domain;
+      try { domain = normalizeDomain(domainInput.value); }
+      catch { status.textContent = "Enter a valid domain, such as example.com."; return; }
+      if (!domain || !domain.includes(".") || domain.includes(" ")) {
         status.textContent = "Enter a valid domain, such as example.com.";
         return;
       }
@@ -90,7 +94,7 @@
     document.querySelector("#check-form").addEventListener("submit", event => {
       event.preventDefault();
       let host;
-      try { host = new URL(document.querySelector("#url").value).hostname.toLowerCase().replace(/^www\\./, ""); }
+      try { host = new URL(document.querySelector("#url").value).hostname.toLowerCase().replace(/^www[.]/, ""); }
       catch { status.textContent = "Enter a valid URL including https://"; return; }
       const blocked = getDomains().some(domain => host === domain || host.endsWith("." + domain));
       status.textContent = blocked ? "Flagged: this domain matches your local list." : "No match in your local list.";
