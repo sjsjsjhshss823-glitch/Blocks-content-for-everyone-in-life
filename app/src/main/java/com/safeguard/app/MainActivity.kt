@@ -11,7 +11,6 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
-import android.app.role.RoleManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.view.Gravity
@@ -85,6 +84,7 @@ class MainActivity : Activity() {
         root.addView(status, match())
         addAction(root, "הפעלת סינון", "אישור חיבור VPN") { requestVpn() }
         addAction(root, "שמירה על ההגנה ברקע", "VPN תמידי והגדרות סוללה") { showBackgroundProtectionOptions() }
+        addAction(root, "הפעלת סמל צף", "סמל שקוף מעל האפליקציות") { requestOverlayPermission() }
         addAction(root, "אישור ניהול מכשיר", "ניהול הרשאות מנהל") { requestDeviceAdmin() }
         addAction(root, "אישור נתוני שימוש", "פתיחת הרשאת גישה לנתוני שימוש") {
             openSettings(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS), "לא ניתן לפתוח את הגדרות נתוני השימוש")
@@ -94,7 +94,6 @@ class MainActivity : Activity() {
                 openSettings(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")), "לא ניתן לפתוח את הרשאת הציור")
             } else status.text = "ההרשאה אינה נדרשת בגרסת Android זו"
         }
-        addAction(root, "הגדרת SafeGuard כדף הבית", "בחירת אפליקציית מסך הבית") { requestHomeRole() }
         addAction(root, "הגדרת קוד אישי", "קוד כניסה בן 4–8 ספרות") { showPinDialog(true) }
         addAction(root, "דיווח תקלות", "אבחון, הרשאות ושיתוף דוח") { showAndShareReport() }
         scroll.addView(root)
@@ -156,20 +155,14 @@ class MainActivity : Activity() {
         startActivityForResult(intent, adminRequestCode)
     }
 
-    private fun requestHomeRole() {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val manager = getSystemService(RoleManager::class.java)
-                if (manager.isRoleAvailable(RoleManager.ROLE_HOME)) {
-                    if (!manager.isRoleHeld(RoleManager.ROLE_HOME)) {
-                        startActivityForResult(manager.createRequestRoleIntent(RoleManager.ROLE_HOME), 419)
-                    } else status.text = "SafeGuard כבר נבחרה כדף הבית"
-                } else openSettings(Intent(Settings.ACTION_HOME_SETTINGS), "המכשיר אינו מאפשר בחירת דף בית מכאן")
-            } else openSettings(Intent(Settings.ACTION_HOME_SETTINGS), "לא ניתן לפתוח את בחירת דף הבית")
-        } catch (e: Exception) {
-            saveError("בחירת דף הבית", e)
-            status.text = "לא ניתן לפתוח את בחירת דף הבית: ${e.javaClass.simpleName}"
-        }
+    private fun requestOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (Settings.canDrawOverlays(this)) {
+                status.text = "הרשאת הציור כבר מאושרת. הסמל הצף יופיע כשהסינון פעיל."
+            } else {
+                openSettings(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")), "לא ניתן לפתוח את הרשאת הציור")
+            }
+        } else status.text = "ההרשאה אינה נדרשת בגרסת Android זו"
     }
 
     private fun openSettings(intent: Intent, error: String) {
@@ -248,7 +241,6 @@ class MainActivity : Activity() {
             append("מנהל מכשיר: ").append(if (admin) "מאושר" else "לא מאושר").append("\n")
             append("נתוני שימוש: ").append(if (usage) "מאושרים" else "לא מאושרים").append("\n")
             append("ציור מעל אפליקציות: ").append(if (overlay) "מאושר" else "לא מאושר").append("\n")
-            append("תפקיד דף הבית: ").append(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && getSystemService(RoleManager::class.java).isRoleHeld(RoleManager.ROLE_HOME)) "מאושר" else "לא נבחר/לא ניתן לאימות").append("\n")
             append("הפעלה אחרונה: ").append(time("last_start")).append("\n")
             append("פעילות אחרונה: ").append(time("last_heartbeat")).append("\n")
             append("עצירה אחרונה: ").append(time("last_stop")).append("\n")
@@ -284,7 +276,6 @@ class MainActivity : Activity() {
                 status.text = "ההגנה מתחילה לפעול"
             } else status.text = "יש לאשר את חיבור ה‑VPN להפעלת הסינון"
             adminRequestCode -> status.text = if (resultCode == RESULT_OK) "אישור ניהול המכשיר התקבל" else "אישור ניהול המכשיר לא התקבל"
-            419 -> status.text = "בקשת הגדרת דף הבית הסתיימה"
         }
     }
 
