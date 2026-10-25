@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SafeGuard — Content Safety</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { max-width: 760px; margin: 0 auto; padding: 24px; line-height: 1.5; }
+    main { border: 1px solid #8886; border-radius: 16px; padding: 20px; }
+    input, button { font: inherit; padding: 10px 12px; border-radius: 8px; }
+    input { width: min(100%, 420px); box-sizing: border-box; }
+    button { cursor: pointer; }
+    li { margin: 8px 0; overflow-wrap: anywhere; }
+    .muted { opacity: .75; }
+    #status { font-weight: 600; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>SafeGuard</h1>
+    <p>Manage a local list of domains to flag in this demo.</p>
+    <form id="add-form">
+      <label for="domain">Domain (for example, example.com)</label><br>
+      <input id="domain" name="domain" placeholder="example.com" autocomplete="off" required>
+      <button type="submit">Add domain</button>
+    </form>
+    <h2>Blocked-domain list</h2>
+    <ul id="domains"></ul>
+    <h2>Check a URL</h2>
+    <form id="check-form">
+      <label for="url">URL to check</label><br>
+      <input id="url" name="url" placeholder="https://example.com/page" required>
+      <button type="submit">Check URL</button>
+    </form>
+    <p id="status" role="status" aria-live="polite"></p>
+    <p class="muted">Prototype only: this page does not block network traffic or filter other apps.</p>
+  </main>
+  <script>
+    const KEY = "safeguard-blocked-domains-v1";
+    const domainInput = document.querySelector("#domain");
+    const domainsList = document.querySelector("#domains");
+    const status = document.querySelector("#status");
+    function getDomains() {
+      try { return JSON.parse(localStorage.getItem(KEY) || "[]"); }
+      catch { return []; }
+    }
+    function saveDomains(domains) { localStorage.setItem(KEY, JSON.stringify(domains)); }
+    function normalizeDomain(value) {
+      return value.trim().toLowerCase().replace(/^https?:\\/\\//, "").split(/[\\/?#]/)[0].replace(/^www\\./, "");
+    }
+    function render() {
+      const domains = getDomains();
+      domainsList.replaceChildren();
+      if (!domains.length) {
+        const li = document.createElement("li");
+        li.textContent = "No domains added yet.";
+        domainsList.append(li);
+        return;
+      }
+      for (const domain of domains) {
+        const li = document.createElement("li");
+        const label = document.createElement("span");
+        label.textContent = domain + " ";
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.textContent = "Remove";
+        remove.addEventListener("click", () => {
+          saveDomains(getDomains().filter(item => item !== domain));
+          render();
+        });
+        li.append(label, remove);
+        domainsList.append(li);
+      }
+    }
+    document.querySelector("#add-form").addEventListener("submit", event => {
+      event.preventDefault();
+      const domain = normalizeDomain(domainInput.value);
+      if (!domain || !domain.includes(".") || /\\s/.test(domain)) {
+        status.textContent = "Enter a valid domain, such as example.com.";
+        return;
+      }
+      const domains = getDomains();
+      if (!domains.includes(domain)) domains.push(domain);
+      saveDomains(domains);
+      domainInput.value = "";
+      status.textContent = "Domain added to this browser's local list.";
+      render();
+    });
+    document.querySelector("#check-form").addEventListener("submit", event => {
+      event.preventDefault();
+      let host;
+      try { host = new URL(document.querySelector("#url").value).hostname.toLowerCase().replace(/^www\\./, ""); }
+      catch { status.textContent = "Enter a valid URL including https://"; return; }
+      const blocked = getDomains().some(domain => host === domain || host.endsWith("." + domain));
+      status.textContent = blocked ? "Flagged: this domain matches your local list." : "No match in your local list.";
+    });
+    render();
+  </script>
+</body>
+</html>
