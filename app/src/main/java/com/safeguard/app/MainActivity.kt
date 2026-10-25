@@ -84,6 +84,7 @@ class MainActivity : Activity() {
         }
         root.addView(status, match())
         addAction(root, "הפעלת סינון", "אישור חיבור VPN") { requestVpn() }
+        addAction(root, "שמירה על ההגנה ברקע", "VPN תמידי והגדרות סוללה") { showBackgroundProtectionOptions() }
         addAction(root, "אישור ניהול מכשיר", "ניהול הרשאות מנהל") { requestDeviceAdmin() }
         addAction(root, "אישור נתוני שימוש", "פתיחת הרשאת גישה לנתוני שימוש") {
             openSettings(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS), "לא ניתן לפתוח את הגדרות נתוני השימוש")
@@ -124,6 +125,28 @@ class MainActivity : Activity() {
         }
     }
 
+
+    private fun showBackgroundProtectionOptions() {
+        AlertDialog.Builder(this)
+            .setTitle("שמירה על ההגנה")
+            .setMessage("כדי שהסינון ימשיך אחרי הסרת SafeGuard ממסך האפליקציות האחרונות, הפעילו VPN תמידי בהגדרות Android. אם המכשיר עדיין סוגר את השירות, אפשר גם לאפשר פעילות ללא הגבלת סוללה.")
+            .setPositiveButton("הגדרות VPN") { _, _ ->
+                openSettings(Intent(Settings.ACTION_VPN_SETTINGS), "לא ניתן לפתוח את הגדרות VPN")
+            }
+            .setNeutralButton("הגדרות סוללה") { _, _ ->
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    try {
+                        startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+                    } catch (e: Exception) {
+                        saveError("פתיחת הגדרות סוללה", e)
+                        openSettings(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS), "לא ניתן לפתוח את הגדרות הסוללה")
+                    }
+                } else status.text = "אין צורך בהרשאה זו בגרסת Android"
+            }
+            .setNegativeButton("סגירה", null)
+            .show()
+    }
+
     private fun requestDeviceAdmin() {
         val component = ComponentName(this, SafeGuardAdminReceiver::class.java)
         val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
@@ -134,13 +157,18 @@ class MainActivity : Activity() {
     }
 
     private fun requestHomeRole() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val manager = getSystemService(RoleManager::class.java)
-            if (manager.isRoleAvailable(RoleManager.ROLE_HOME) && !manager.isRoleHeld(RoleManager.ROLE_HOME)) {
-                startActivityForResult(manager.createRequestRoleIntent(RoleManager.ROLE_HOME), 419)
-            } else status.text = "SafeGuard כבר מוגדרת כדף הבית או שהאפשרות אינה זמינה"
-        } else {
-            openSettings(Intent(Settings.ACTION_HOME_SETTINGS), "לא ניתן לפתוח את בחירת דף הבית")
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val manager = getSystemService(RoleManager::class.java)
+                if (manager.isRoleAvailable(RoleManager.ROLE_HOME)) {
+                    if (!manager.isRoleHeld(RoleManager.ROLE_HOME)) {
+                        startActivityForResult(manager.createRequestRoleIntent(RoleManager.ROLE_HOME), 419)
+                    } else status.text = "SafeGuard כבר נבחרה כדף הבית"
+                } else openSettings(Intent(Settings.ACTION_HOME_SETTINGS), "המכשיר אינו מאפשר בחירת דף בית מכאן")
+            } else openSettings(Intent(Settings.ACTION_HOME_SETTINGS), "לא ניתן לפתוח את בחירת דף הבית")
+        } catch (e: Exception) {
+            saveError("בחירת דף הבית", e)
+            status.text = "לא ניתן לפתוח את בחירת דף הבית: ${e.javaClass.simpleName}"
         }
     }
 
