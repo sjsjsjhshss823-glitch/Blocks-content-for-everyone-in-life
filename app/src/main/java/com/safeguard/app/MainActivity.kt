@@ -234,6 +234,9 @@ class MainActivity : Activity() {
             mode == android.app.AppOpsManager.MODE_ALLOWED
         } catch (_: Exception) { false }
         val overlay = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)
+        val alwaysOnVpn = try {
+            Settings.Secure.getString(contentResolver, "always_on_vpn_app") == packageName
+        } catch (_: Exception) { false }
         val report = buildString {
             append("דוח אבחון SafeGuard\n")
             append("גרסת Android: ").append(Build.VERSION.RELEASE).append("\n")
@@ -241,7 +244,10 @@ class MainActivity : Activity() {
             append("מנהל מכשיר: ").append(if (admin) "מאושר" else "לא מאושר").append("\n")
             append("נתוני שימוש: ").append(if (usage) "מאושרים" else "לא מאושרים").append("\n")
             append("ציור מעל אפליקציות: ").append(if (overlay) "מאושר" else "לא מאושר").append("\n")
+            append("VPN תמידי של Android: ").append(if (alwaysOnVpn) "מוגדר ל־SafeGuard" else "לא מוגדר ל־SafeGuard").append("\n")
             append("הפעלה אחרונה: ").append(time("last_start")).append("\n")
+            append("הסרת האפליקציה מההיסטוריה: ").append(time("last_task_removed")).append("\n")
+            append("סיום שירות אחרון: ").append(time("last_service_destroy")).append("\n")
             append("פעילות אחרונה: ").append(time("last_heartbeat")).append("\n")
             append("עצירה אחרונה: ").append(time("last_stop")).append("\n")
             append("זמן שגיאה אחרונה: ").append(time("last_error_time")).append("\n")
