@@ -37,6 +37,7 @@
             android:name=".SafeGuardVpnService"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="systemExempted">
             <intent-filter>
                 <action android:name="android.net.VpnService" />
