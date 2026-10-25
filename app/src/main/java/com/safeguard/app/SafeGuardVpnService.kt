@@ -1,0 +1,164 @@
+package com.safeguard.app
+
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Intent
+import android.net.VpnService
+import android.os.Build
+import android.os.ParcelFileDescriptor
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.net.SocketTimeoutException
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.concurrent.thread
+
+class SafeGuardVpnService : VpnService() {
+    private var tun: ParcelFileDescriptor? = null
+    private val running = AtomicBoolean(false)
+    private val dnsAddress = byteArrayOf(10, 111, 222, 1)
+    private val upstreamAddress = byteArrayOf(185.toByte(), 228.toByte(), 168.toByte(), 168.toByte())
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        startForeground(7401, notification())
+        if (running.compareAndSet(false, true)) thread(name = "SafeGuard-DNS") { runVpn() }
+        return START_STICKY
+    }
+
+    private fun notification(): Notification {
+        val channelId = "safeguard_protection"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(NotificationChannel(channelId, "SafeGuard protection", NotificationManager.IMPORTANCE_LOW))
+        }
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, channelId) else Notification.Builder(this)
+        return builder.setContentTitle("SafeGuard is active")
+            .setContentText("Family DNS filtering is enabled")
+            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setOngoing(true)
+            .build()
+    }
+
+    private fun runVpn() {
+        try {
+            tun = Builder()
+                .setSession("SafeGuard")
+                .setMtu(1500)
+                .addAddress("10.111.222.2", 32)
+                .addDnsServer("10.111.222.1")
+                .addRoute("10.111.222.1", 32)
+                .establish()
+            val fd = tun ?: return
+            val input = FileInputStream(fd.fileDescriptor)
+            val output = FileOutputStream(fd.fileDescriptor)
+            val packetBuffer = ByteArray(32767)
+            while (running.get()) {
+                val length = input.read(packetBuffer)
+                if (length <= 0) continue
+                val response = processDnsPacket(packetBuffer.copyOf(length))
+                if (response != null) synchronized(output) { output.write(response) }
+            }
+        } catch (_: Exception) {
+            // Service teardown below exposes the stopped state by removing its notification.
+        } finally {
+            running.set(false)
+            try { tun?.close() } catch (_: Exception) {}
+            tun = null
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
+    }
+
+    private fun processDnsPacket(packet: ByteArray): ByteArray? {
+        if (packet.size < 28 || (packet[0].toInt() and 0xF0) != 0x40) return null
+        val ihl = (packet[0].toInt() and 0x0F) * 4
+        if (ihl < 20 || packet.size < ihl + 8) return null
+        if ((packet[9].toInt() and 0xff) != 17) return null
+        if (!packet.copyOfRange(16, 20).contentEquals(dnsAddress)) return null
+        val udpLen = u16(packet, ihl + 4)
+        if (udpLen < 8 || packet.size < ihl + udpLen || u16(packet, ihl + 2) != 53) return null
+        val query = packet.copyOfRange(ihl + 8, ihl + udpLen)
+        val dnsResponse = try {
+            DatagramSocket().use { socket ->
+                if (!protect(socket)) return null
+                socket.soTimeout = 3500
+                val address = InetAddress.getByAddress(upstreamAddress)
+                socket.send(DatagramPacket(query, query.size, address, 53))
+                val bytes = ByteArray(4096)
+                val reply = DatagramPacket(bytes, bytes.size)
+                socket.receive(reply)
+                bytes.copyOf(reply.length)
+            }
+        } catch (_: SocketTimeoutException) {
+            return null
+        } catch (_: Exception) {
+            return null
+        }
+        return buildIpv4UdpResponse(packet, ihl, dnsResponse)
+    }
+
+    private fun buildIpv4UdpResponse(request: ByteArray, ihl: Int, dns: ByteArray): ByteArray {
+        val srcIp = request.copyOfRange(12, 16)
+        val dstIp = request.copyOfRange(16, 20)
+        val srcPort = u16(request, ihl)
+        val totalLength = 28 + dns.size
+        val out = ByteArray(totalLength)
+        out[0] = 0x45
+        out[1] = 0
+        put16(out, 2, totalLength)
+        put16(out, 4, 0)
+        put16(out, 6, 0x4000)
+        out[8] = 64
+        out[9] = 17
+        System.arraycopy(dstIp, 0, out, 12, 4)
+        System.arraycopy(srcIp, 0, out, 16, 4)
+        put16(out, 10, checksum(out, 0, 20))
+        put16(out, 20, 53)
+        put16(out, 22, srcPort)
+        put16(out, 24, 8 + dns.size)
+        put16(out, 26, 0)
+        System.arraycopy(dns, 0, out, 28, dns.size)
+        val pseudo = ByteArray(12 + 8 + dns.size)
+        System.arraycopy(out, 12, pseudo, 0, 8)
+        pseudo[9] = 17
+        put16(pseudo, 10, 8 + dns.size)
+        System.arraycopy(out, 20, pseudo, 12, 8 + dns.size)
+        var udpChecksum = checksum(pseudo, 0, pseudo.size)
+        if (udpChecksum == 0) udpChecksum = 0xffff
+        put16(out, 26, udpChecksum)
+        return out
+    }
+
+    private fun u16(bytes: ByteArray, offset: Int): Int =
+        ((bytes[offset].toInt() and 0xff) shl 8) or (bytes[offset + 1].toInt() and 0xff)
+
+    private fun put16(bytes: ByteArray, offset: Int, value: Int) {
+        bytes[offset] = (value shr 8).toByte()
+        bytes[offset + 1] = value.toByte()
+    }
+
+    private fun checksum(bytes: ByteArray, offset: Int, length: Int): Int {
+        var sum = 0L
+        var i = offset
+        val end = offset + length
+        while (i + 1 < end) {
+            sum += (((bytes[i].toInt() and 0xff) shl 8) or (bytes[i + 1].toInt() and 0xff)).toLong()
+            i += 2
+        }
+        if (i < end) sum += ((bytes[i].toInt() and 0xff) shl 8).toLong()
+        while ((sum shr 16) != 0L) sum = (sum and 0xffff) + (sum shr 16)
+        return sum.inv().toInt() and 0xffff
+    }
+
+    override fun onRevoke() {
+        running.set(false)
+        try { tun?.close() } catch (_: Exception) {}
+        tun = null
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+        super.onRevoke()
+    }
+}
