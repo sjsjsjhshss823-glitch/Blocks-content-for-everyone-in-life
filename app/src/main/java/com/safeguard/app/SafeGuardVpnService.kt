@@ -7,6 +7,10 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.graphics.PixelFormat
+import android.view.Gravity
+import android.view.WindowManager
+import android.widget.ImageView
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.DatagramPacket
@@ -23,10 +27,13 @@ class SafeGuardVpnService : VpnService() {
     private val upstreamAddress = byteArrayOf(185.toByte(), 228.toByte(), 168.toByte(), 168.toByte())
 
     private val diagnostics by lazy { getSharedPreferences("safeguard_diagnostics", MODE_PRIVATE) }
+    private var floatingIcon: ImageView? = null
+    private var windowManager: WindowManager? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         diagnostics.edit().putLong("last_start", System.currentTimeMillis()).apply()
         startForeground(7401, notification())
+        showFloatingIconIfAllowed()
         if (running.compareAndSet(false, true)) thread(name = "SafeGuard-DNS") { runVpn() }
         return START_STICKY
     }
@@ -38,11 +45,60 @@ class SafeGuardVpnService : VpnService() {
             manager.createNotificationChannel(NotificationChannel(channelId, "הגנת SafeGuard", NotificationManager.IMPORTANCE_LOW))
         }
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, channelId) else Notification.Builder(this)
-        return builder.setContentTitle("SafeGuard פעילה")
-            .setContentText("סינון DNS משפחתי מופעל")
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
+        return builder.setContentTitle("SafeGuard")
+            .setContentText("סינון פעיל")
+            .setSmallIcon(R.drawable.ic_safeguard)
             .setOngoing(true)
             .build()
+    }
+
+    private fun showFloatingIconIfAllowed() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || !android.provider.Settings.canDrawOverlays(this)) return
+        if (floatingIcon != null) return
+        try {
+            windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+            val size = (44 * resources.displayMetrics.density).toInt()
+            val icon = ImageView(this).apply {
+                setImageResource(R.drawable.ic_safeguard)
+                alpha = 0.38f
+                contentDescription = "SafeGuard — סינון פעיל"
+                setOnClickListener {
+                    try {
+                        val launch = packageManager.getLaunchIntentForPackage(packageName)
+                        launch?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        if (launch != null) startActivity(launch)
+                    } catch (_: Exception) {}
+                }
+            }
+            val windowType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            else WindowManager.LayoutParams.TYPE_PHONE
+            val params = WindowManager.LayoutParams(
+                size, size, windowType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                x = (8 * resources.displayMetrics.density).toInt()
+                y = 0
+            }
+            windowManager?.addView(icon, params)
+            floatingIcon = icon
+        } catch (e: Exception) {
+            diagnostics.edit().putLong("last_error_time", System.currentTimeMillis())
+                .putString("last_error", "שגיאת סמל צף: " + e.javaClass.simpleName + ": " + (e.message ?: "ללא פרטים")).apply()
+        }
+    }
+
+    private fun removeFloatingIcon() {
+        try { floatingIcon?.let { windowManager?.removeView(it) } } catch (_: Exception) {}
+        floatingIcon = null
+        windowManager = null
+    }
+
+    override fun onDestroy() {
+        removeFloatingIcon()
+        super.onDestroy()
     }
 
     private fun runVpn() {
@@ -180,6 +236,7 @@ class SafeGuardVpnService : VpnService() {
         running.set(false)
         try { tun?.close() } catch (_: Exception) {}
         tun = null
+        removeFloatingIcon()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
         super.onRevoke()
