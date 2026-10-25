@@ -208,8 +208,8 @@ class MainActivity : Activity() {
             .isAdminActive(ComponentName(this, SafeGuardAdminReceiver::class.java))
         val usage = try {
             val appOps = getSystemService(APP_OPS_SERVICE) as android.app.AppOpsManager
-            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) appOps.unsafeCheckOpNoThrow("android:get_usage_stats", android.os.Process.myUid(), packageName)
-                else @Suppress("DEPRECATION") appOps.checkOpNoThrow("android:get_usage_stats", android.os.Process.myUid(), packageName)
+            @Suppress("DEPRECATION")
+            val mode = appOps.checkOpNoThrow("android:get_usage_stats", android.os.Process.myUid(), packageName)
             mode == android.app.AppOpsManager.MODE_ALLOWED
         } catch (_: Exception) { false }
         val overlay = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this)
