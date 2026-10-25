@@ -96,13 +96,6 @@ class MainActivity : Activity() {
         addAction(root, "הגדרת SafeGuard כדף הבית", "בחירת אפליקציית מסך הבית") { requestHomeRole() }
         addAction(root, "הגדרת קוד אישי", "קוד כניסה בן 4–8 ספרות") { showPinDialog(true) }
         addAction(root, "דיווח תקלות", "אבחון, הרשאות ושיתוף דוח") { showAndShareReport() }
-        root.addView(TextView(this).apply {
-            text = "ההרשאות מאושרות על ידך בהגדרות Android. ניהול מכשיר אינו מבטיח חסימה מוחלטת של הסרת האפליקציה; הגנה חזקה נגד הסרה דורשת הגדרת המכשיר כמכשיר מנוהל."
-            textSize = 12f
-            setTextColor(Color.rgb(100, 110, 125))
-            gravity = Gravity.CENTER
-            setPadding(dp(4), dp(18), dp(4), 0)
-        }, match())
         scroll.addView(root)
         setContentView(scroll)
     }
