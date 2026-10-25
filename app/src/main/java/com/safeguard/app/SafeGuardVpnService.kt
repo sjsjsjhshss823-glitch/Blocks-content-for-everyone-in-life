@@ -102,7 +102,36 @@ class SafeGuardVpnService : VpnService() {
         windowManager = null
     }
 
+    /**
+     * Android normally keeps a started foreground service alive when its task is
+     * removed. Some device vendors aggressively stop app processes on this event.
+     * Record the event and reassert the foreground-service start; START_STICKY remains
+     * the fallback if Android later recreates the process.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        diagnostics.edit()
+            .putLong("last_task_removed", System.currentTimeMillis())
+            .putString("last_task_removed_note", "SafeGuard הוסר ממסך האפליקציות האחרונות")
+            .apply()
+        try {
+            val keepAlive = Intent(applicationContext, SafeGuardVpnService::class.java)
+                .setAction("com.safeguard.app.KEEP_VPN_ALIVE")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(keepAlive)
+            } else {
+                startService(keepAlive)
+            }
+        } catch (error: Exception) {
+            diagnostics.edit()
+                .putLong("last_error_time", System.currentTimeMillis())
+                .putString("last_error", "הפעלה מחדש לאחר הסרת המשימה: " + error.javaClass.simpleName + ": " + (error.message ?: "ללא פרטים"))
+                .apply()
+        }
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
+        diagnostics.edit().putLong("last_service_destroy", System.currentTimeMillis()).apply()
         removeFloatingIcon()
         super.onDestroy()
     }
