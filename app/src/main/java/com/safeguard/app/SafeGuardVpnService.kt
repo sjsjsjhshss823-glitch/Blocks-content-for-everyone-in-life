@@ -19,7 +19,7 @@ import kotlin.concurrent.thread
 class SafeGuardVpnService : VpnService() {
     private var tun: ParcelFileDescriptor? = null
     private val running = AtomicBoolean(false)
-    private val dnsAddress = byteArrayOf(10, 111, 222, 1)
+    private val dnsAddress = byteArrayOf(10, 111, 222.toByte(), 1)
     private val upstreamAddress = byteArrayOf(185.toByte(), 228.toByte(), 168.toByte(), 168.toByte())
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
