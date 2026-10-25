@@ -22,7 +22,10 @@ class SafeGuardVpnService : VpnService() {
     private val dnsAddress = byteArrayOf(10, 111, 222.toByte(), 1)
     private val upstreamAddress = byteArrayOf(185.toByte(), 228.toByte(), 168.toByte(), 168.toByte())
 
+    private val diagnostics by lazy { getSharedPreferences("safeguard_diagnostics", MODE_PRIVATE) }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        diagnostics.edit().putLong("last_start", System.currentTimeMillis()).apply()
         startForeground(7401, notification())
         if (running.compareAndSet(false, true)) thread(name = "SafeGuard-DNS") { runVpn() }
         return START_STICKY
@@ -32,11 +35,11 @@ class SafeGuardVpnService : VpnService() {
         val channelId = "safeguard_protection"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(NotificationChannel(channelId, "SafeGuard protection", NotificationManager.IMPORTANCE_LOW))
+            manager.createNotificationChannel(NotificationChannel(channelId, "הגנת SafeGuard", NotificationManager.IMPORTANCE_LOW))
         }
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, channelId) else Notification.Builder(this)
-        return builder.setContentTitle("SafeGuard is active")
-            .setContentText("Family DNS filtering is enabled")
+        return builder.setContentTitle("SafeGuard פעילה")
+            .setContentText("סינון DNS משפחתי מופעל")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setOngoing(true)
             .build()
@@ -58,12 +61,17 @@ class SafeGuardVpnService : VpnService() {
             while (running.get()) {
                 val length = input.read(packetBuffer)
                 if (length <= 0) continue
+                diagnostics.edit().putLong("last_heartbeat", System.currentTimeMillis()).apply()
                 val response = processDnsPacket(packetBuffer.copyOf(length))
                 if (response != null) synchronized(output) { output.write(response) }
             }
-        } catch (_: Exception) {
-            // Service teardown below exposes the stopped state by removing its notification.
+        } catch (error: Exception) {
+            diagnostics.edit()
+                .putLong("last_error_time", System.currentTimeMillis())
+                .putString("last_error", "${error.javaClass.simpleName}: ${error.message ?: "ללא פרטים"}")
+                .apply()
         } finally {
+            diagnostics.edit().putLong("last_stop", System.currentTimeMillis()).apply()
             running.set(false)
             try { tun?.close() } catch (_: Exception) {}
             tun = null
@@ -154,6 +162,7 @@ class SafeGuardVpnService : VpnService() {
     }
 
     override fun onRevoke() {
+        diagnostics.edit().putLong("last_stop", System.currentTimeMillis()).apply()
         running.set(false)
         try { tun?.close() } catch (_: Exception) {}
         tun = null
