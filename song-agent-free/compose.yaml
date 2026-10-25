@@ -1,0 +1,22 @@
+services:
+  songflow:
+    build: .
+    container_name: songflow-free
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      ACE_STEP_API_URL: ${ACE_STEP_API_URL:-http://host.docker.internal:8001}
+      DATABASE_PATH: /app/data/jobs.sqlite3
+      MEDIA_DIR: /app/media
+      YOUTUBE_CLIENT_SECRETS_FILE: /app/secrets/client_secret.json
+      YOUTUBE_TOKEN_FILE: /app/data/youtube-token.json
+      YOUTUBE_REDIRECT_URI: http://localhost:8000/oauth/callback
+    ports:
+      - "127.0.0.1:8000:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data:/app/data
+      - ./media:/app/media
+      - ./secrets:/app/secrets:ro
