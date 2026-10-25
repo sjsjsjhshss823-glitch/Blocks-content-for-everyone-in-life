@@ -32,13 +32,13 @@ class SafeGuardVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         diagnostics.edit().putLong("last_start", System.currentTimeMillis()).apply()
-        startForeground(7401, notification())
+        startForeground(7401, notification("מנסה להתחבר ל־VPN"))
         showFloatingIconIfAllowed()
         if (running.compareAndSet(false, true)) thread(name = "SafeGuard-DNS") { runVpn() }
         return START_STICKY
     }
 
-    private fun notification(): Notification {
+    private fun notification(message: String): Notification {
         val channelId = "safeguard_protection"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = getSystemService(NotificationManager::class.java)
@@ -46,10 +46,16 @@ class SafeGuardVpnService : VpnService() {
         }
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, channelId) else Notification.Builder(this)
         return builder.setContentTitle("SafeGuard")
-            .setContentText("סינון פעיל")
+            .setContentText(message)
             .setSmallIcon(R.drawable.ic_safeguard)
             .setOngoing(true)
             .build()
+    }
+
+    private fun updateNotification(message: String) {
+        try {
+            getSystemService(NotificationManager::class.java).notify(7401, notification(message))
+        } catch (_: Exception) {}
     }
 
     private fun showFloatingIconIfAllowed() {
@@ -112,6 +118,7 @@ class SafeGuardVpnService : VpnService() {
                     .addRoute("10.111.222.1", 32)
                     .establish()
                 val fd = tun ?: throw IllegalStateException("Android לא אישר יצירת חיבור VPN")
+                updateNotification("סינון פעיל")
                 val input = FileInputStream(fd.fileDescriptor)
                 val output = FileOutputStream(fd.fileDescriptor)
                 val packetBuffer = ByteArray(32767)
@@ -124,6 +131,7 @@ class SafeGuardVpnService : VpnService() {
                 }
             } catch (error: Exception) {
                 if (running.get()) {
+                    updateNotification("אין חיבור VPN — מנסה להתחבר מחדש")
                     diagnostics.edit()
                         .putLong("last_error_time", System.currentTimeMillis())
                         .putString("last_error", "${error.javaClass.simpleName}: ${error.message ?: "ללא פרטים"}")
@@ -143,6 +151,7 @@ class SafeGuardVpnService : VpnService() {
             }
         }
         diagnostics.edit().putLong("last_stop", System.currentTimeMillis()).apply()
+        updateNotification("הסינון נעצר")
         running.set(false)
         try { tun?.close() } catch (_: Exception) {}
         tun = null
