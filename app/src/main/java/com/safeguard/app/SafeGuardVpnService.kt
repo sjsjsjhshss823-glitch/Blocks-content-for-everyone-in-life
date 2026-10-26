@@ -35,12 +35,22 @@ class SafeGuardVpnService : VpnService() {
         diagnostics.edit().putLong("last_start", System.currentTimeMillis()).apply()
         startForeground(7401, notification("מנסה להתחבר ל־VPN"))
         showFloatingIconIfAllowed()
-        // START_STICKY may recreate the service with a null intent. Ensure one worker only.
-        if (running.compareAndSet(false, true)) {
+        // START_STICKY may recreate the service with a null intent. Do not trust
+        // the running flag alone: it can be stale if a worker exited unexpectedly.
+        // Service callbacks run on the main thread, so this check prevents duplicate
+        // workers while allowing a dead worker to be restarted.
+        if (worker?.isAlive != true) {
+            running.set(true)
+            diagnostics.edit()
+                .putLong("last_worker_launch", System.currentTimeMillis())
+                .putString("worker_launch_reason", if (intent == null) "START_STICKY עם intent ריק" else "בקשת הפעלה של השירות")
+                .putBoolean("vpn_worker_running", false)
+                .putString("vpn_state", "עובד VPN מתחיל לפעול")
+                .apply()
             worker = thread(name = "SafeGuard-DNS") { runVpn() }
         } else {
             diagnostics.edit().putLong("last_duplicate_start", System.currentTimeMillis())
-                .putString("vpn_state", "התקבלה בקשת הפעלה כשהשירות כבר פועל").apply()
+                .putString("vpn_state", "התקבלה בקשת הפעלה; עובד VPN כבר פעיל").apply()
         }
         return START_STICKY
     }
