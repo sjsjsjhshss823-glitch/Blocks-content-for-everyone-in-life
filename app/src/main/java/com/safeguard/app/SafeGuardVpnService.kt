@@ -116,25 +116,23 @@ class SafeGuardVpnService : VpnService() {
      * the fallback if Android later recreates the process.
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
+        // Removing the activity from Recents is not itself proof that the VPN stopped.
+        // Keep vpn_state intact; it describes the VPN worker, not the activity task.
+        val workerAlive = worker?.isAlive == true
+        val tunOpen = try { tun?.fileDescriptor?.valid() == true } catch (_: Exception) { false }
         diagnostics.edit()
             .putLong("last_task_removed", System.currentTimeMillis())
             .putString("last_task_removed_note", "SafeGuard הוסר ממסך האפליקציות האחרונות")
+            .putBoolean("worker_alive_at_task_removed", workerAlive)
+            .putBoolean("tun_open_at_task_removed", tunOpen)
+            .putString("task_removed_snapshot", "workerAlive=" + workerAlive + ", tunOpen=" + tunOpen + ", running=" + running.get())
             .apply()
-        // Avoid racing Android's always-on VPN lifecycle with a second service start.
-        // Android/START_STICKY handle recreation; record task removal for diagnosis.
-        try {
-            diagnostics.edit().putString("vpn_state", "האפליקציה הוסרה מהאחרונות; נרשם אירוע סגירה").apply()
-        } catch (error: Exception) {
-            diagnostics.edit()
-                .putLong("last_error_time", System.currentTimeMillis())
-                .putString("last_error", "הפעלה מחדש לאחר הסרת המשימה: " + error.javaClass.simpleName + ": " + (error.message ?: "ללא פרטים"))
-                .apply()
-        }
         super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
         diagnostics.edit().putLong("last_service_destroy", System.currentTimeMillis())
+            .putBoolean("vpn_worker_running", false)
             .putString("vpn_state", "Android סיים את השירות; סוגר חיבור ותהליך עבודה").apply()
         // Closing TUN unblocks the reader if Android destroys this service instance.
         running.set(false)
@@ -160,7 +158,8 @@ class SafeGuardVpnService : VpnService() {
                     .establish()
                 val fd = tun ?: throw IllegalStateException("Android לא אישר יצירת חיבור VPN (Builder.establish החזיר null)")
                 diagnostics.edit().putLong("last_establish_success", System.currentTimeMillis())
-                    .putString("vpn_state", "חיבור TUN הוקם; ממתין לתעבורת DNS").apply()
+                    .putString("vpn_state", "חיבור TUN הוקם; ממתין לתעבורת DNS")
+                    .putBoolean("vpn_worker_running", true).apply()
                 updateNotification("סינון פעיל")
                 val input = FileInputStream(fd.fileDescriptor)
                 val output = FileOutputStream(fd.fileDescriptor)
@@ -168,7 +167,9 @@ class SafeGuardVpnService : VpnService() {
                 while (running.get()) {
                     val length = input.read(packetBuffer)
                     if (length <= 0) continue
-                    diagnostics.edit().putLong("last_heartbeat", System.currentTimeMillis()).apply()
+                    diagnostics.edit().putLong("last_heartbeat", System.currentTimeMillis())
+                        .putLong("last_packet_time", System.currentTimeMillis())
+                        .putInt("packets_seen", diagnostics.getInt("packets_seen", 0) + 1).apply()
                     val response = processDnsPacket(packetBuffer.copyOf(length))
                     if (response != null) synchronized(output) { output.write(response) }
                 }
@@ -193,6 +194,7 @@ class SafeGuardVpnService : VpnService() {
             }
         }
         diagnostics.edit().putLong("last_stop", System.currentTimeMillis())
+            .putBoolean("vpn_worker_running", false)
             .putString("vpn_state", "לולאת VPN הסתיימה").apply()
         updateNotification("הסינון נעצר")
         running.set(false)
@@ -211,6 +213,8 @@ class SafeGuardVpnService : VpnService() {
         val udpLen = u16(packet, ihl + 4)
         if (udpLen < 8 || packet.size < ihl + udpLen || u16(packet, ihl + 2) != 53) return null
         val query = packet.copyOfRange(ihl + 8, ihl + udpLen)
+        diagnostics.edit().putLong("last_dns_query", System.currentTimeMillis())
+            .putInt("dns_queries_seen", diagnostics.getInt("dns_queries_seen", 0) + 1).apply()
         val dnsResponse = try {
             DatagramSocket().use { socket ->
                 if (!protect(socket)) return null
@@ -220,6 +224,8 @@ class SafeGuardVpnService : VpnService() {
                 val bytes = ByteArray(4096)
                 val reply = DatagramPacket(bytes, bytes.size)
                 socket.receive(reply)
+                diagnostics.edit().putLong("last_dns_response", System.currentTimeMillis())
+                    .putInt("dns_responses_received", diagnostics.getInt("dns_responses_received", 0) + 1).apply()
                 bytes.copyOf(reply.length)
             }
         } catch (_: SocketTimeoutException) {
@@ -285,6 +291,7 @@ class SafeGuardVpnService : VpnService() {
 
     override fun onRevoke() {
         diagnostics.edit().putLong("last_stop", System.currentTimeMillis())
+            .putBoolean("vpn_worker_running", false)
             .putString("vpn_state", "Android ביטל את הרשאת VPN (onRevoke)").apply()
         running.set(false)
         try { tun?.close() } catch (_: Exception) {}
