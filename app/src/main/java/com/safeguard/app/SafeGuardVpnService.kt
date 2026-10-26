@@ -127,6 +127,28 @@ class SafeGuardVpnService : VpnService() {
             .putBoolean("tun_open_at_task_removed", tunOpen)
             .putString("task_removed_snapshot", "workerAlive=" + workerAlive + ", tunOpen=" + tunOpen + ", running=" + running.get())
             .apply()
+
+        // If the task was removed after the worker had already died, recover inside
+        // the still-started service instead of leaving running=true with no worker.
+        // Do not create a second worker when an existing worker is still connecting.
+        if (!workerAlive && (!running.get() || worker?.isAlive != true)) {
+            try {
+                running.set(true)
+                startForeground(7401, notification("מאתחל מחדש את הסינון"))
+                diagnostics.edit()
+                    .putLong("last_task_recovery_attempt", System.currentTimeMillis())
+                    .putString("vpn_state", "מפעיל מחדש את עובד ה־VPN לאחר הסרת האפליקציה מהאחרונות")
+                    .apply()
+                worker = thread(name = "SafeGuard-DNS-recovery") { runVpn() }
+            } catch (error: Exception) {
+                running.set(false)
+                diagnostics.edit()
+                    .putLong("last_error_time", System.currentTimeMillis())
+                    .putString("last_error", "שחזור אחרי הסרה מהאחרונות נכשל: ${error.javaClass.simpleName}: ${error.message ?: "ללא פרטים"}")
+                    .putString("vpn_state", "שחזור עובד VPN נכשל")
+                    .apply()
+            }
+        }
         super.onTaskRemoved(rootIntent)
     }
 
