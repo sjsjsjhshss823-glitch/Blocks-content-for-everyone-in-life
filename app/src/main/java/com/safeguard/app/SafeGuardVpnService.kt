@@ -239,23 +239,44 @@ class SafeGuardVpnService : VpnService() {
             .putInt("dns_queries_seen", diagnostics.getInt("dns_queries_seen", 0) + 1).apply()
         val dnsResponse = try {
             DatagramSocket().use { socket ->
-                if (!protect(socket)) return null
+                if (!protect(socket)) {
+                    recordDnsFailure("protect(socket) החזיר false; בקשת DNS לא נשלחה")
+                    return null
+                }
                 socket.soTimeout = 3500
                 val address = InetAddress.getByAddress(upstreamAddress)
                 socket.send(DatagramPacket(query, query.size, address, 53))
+                diagnostics.edit().putLong("last_dns_send", System.currentTimeMillis())
+                    .putInt("dns_queries_sent", diagnostics.getInt("dns_queries_sent", 0) + 1).apply()
                 val bytes = ByteArray(4096)
                 val reply = DatagramPacket(bytes, bytes.size)
                 socket.receive(reply)
                 diagnostics.edit().putLong("last_dns_response", System.currentTimeMillis())
-                    .putInt("dns_responses_received", diagnostics.getInt("dns_responses_received", 0) + 1).apply()
+                    .putInt("dns_responses_received", diagnostics.getInt("dns_responses_received", 0) + 1)
+                    .putInt("last_dns_response_bytes", reply.length).apply()
                 bytes.copyOf(reply.length)
             }
         } catch (_: SocketTimeoutException) {
+            diagnostics.edit().putInt("dns_timeouts", diagnostics.getInt("dns_timeouts", 0) + 1).apply()
+            recordDnsFailure("SocketTimeoutException: שרת DNS לא החזיר תשובה תוך 3500ms")
             return null
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            diagnostics.edit().putInt("dns_errors", diagnostics.getInt("dns_errors", 0) + 1).apply()
+            recordDnsFailure("${error.javaClass.name}: ${error.message ?: "ללא הודעה"}")
             return null
         }
         return buildIpv4UdpResponse(packet, ihl, dnsResponse)
+    }
+
+    /**
+     * Store transport errors without recording queried domains or browsing history.
+     * This makes the diagnostic report actionable while keeping it privacy-preserving.
+     */
+    private fun recordDnsFailure(message: String) {
+        diagnostics.edit()
+            .putLong("last_dns_error_time", System.currentTimeMillis())
+            .putString("last_dns_error", message.take(500))
+            .apply()
     }
 
     private fun buildIpv4UdpResponse(request: ByteArray, ihl: Int, dns: ByteArray): ByteArray {
