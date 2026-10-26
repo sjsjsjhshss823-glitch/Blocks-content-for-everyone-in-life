@@ -250,9 +250,10 @@ class MainActivity : Activity() {
             caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
         } catch (_: Exception) { false }
         val appVersion = try {
-            val info = if (Build.VERSION.SDK_INT >= 33) packageManager.getPackageInfo(packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
-                else @Suppress("DEPRECATION") packageManager.getPackageInfo(packageName, 0)
-            "${info.versionName ?: "לא ידוע"} (versionCode=${if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else @Suppress("DEPRECATION") info.versionCode})"
+            @Suppress("DEPRECATION")
+            val info = packageManager.getPackageInfo(packageName, 0)
+            val versionCode = if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
+            "${info.versionName ?: "לא ידוע"} (versionCode=$versionCode)"
         } catch (e: Exception) { "לא ניתן לקרוא גרסה: ${e.javaClass.simpleName}: ${e.message ?: "ללא פרטים"}" }
         val report = buildString {
             append("דוח אבחון SafeGuard\n")
