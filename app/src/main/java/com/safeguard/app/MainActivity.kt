@@ -8,6 +8,8 @@ import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
 import android.net.VpnService
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -237,6 +239,21 @@ class MainActivity : Activity() {
         val alwaysOnVpn = try {
             Settings.Secure.getString(contentResolver, "always_on_vpn_app") == packageName
         } catch (_: Exception) { false }
+        val batteryOptimizationIgnored = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                (getSystemService(POWER_SERVICE) as android.os.PowerManager).isIgnoringBatteryOptimizations(packageName)
+            } else true
+        } catch (_: Exception) { false }
+        val vpnTransportActive = try {
+            val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+            val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+            caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        } catch (_: Exception) { false }
+        val appVersion = try {
+            val info = if (Build.VERSION.SDK_INT >= 33) packageManager.getPackageInfo(packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0))
+                else @Suppress("DEPRECATION") packageManager.getPackageInfo(packageName, 0)
+            "${info.versionName ?: "לא ידוע"} (versionCode=${if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else @Suppress("DEPRECATION") info.versionCode})"
+        } catch (e: Exception) { "לא ניתן לקרוא גרסה: ${e.javaClass.simpleName}: ${e.message ?: "ללא פרטים"}" }
         val report = buildString {
             append("דוח אבחון SafeGuard\n")
             append("גרסת Android: ").append(Build.VERSION.RELEASE).append("\n")
@@ -244,7 +261,12 @@ class MainActivity : Activity() {
             append("מנהל מכשיר: ").append(if (admin) "מאושר" else "לא מאושר").append("\n")
             append("נתוני שימוש: ").append(if (usage) "מאושרים" else "לא מאושרים").append("\n")
             append("ציור מעל אפליקציות: ").append(if (overlay) "מאושר" else "לא מאושר").append("\n")
+            append("גרסת SafeGuard: ").append(appVersion).append("\n")
+            append("SDK של Android: ").append(Build.VERSION.SDK_INT).append("\n")
+            append("יעד SDK: ").append(applicationInfo.targetSdkVersion).append("\n")
             append("VPN תמידי של Android: ").append(if (alwaysOnVpn) "מוגדר ל־SafeGuard" else "לא מוגדר ל־SafeGuard").append("\n")
+            append("Android מזהה כרגע חיבור VPN ברשת הפעילה: ").append(vpnTransportActive).append("\n")
+            append("החרגה מאופטימיזציית סוללה: ").append(batteryOptimizationIgnored).append("\n")
             append("הפעלה אחרונה: ").append(time("last_start")).append("\n")
             append("הסרת האפליקציה מההיסטוריה: ").append(time("last_task_removed")).append("\n")
             append("סיום שירות אחרון: ").append(time("last_service_destroy")).append("\n")
@@ -259,6 +281,13 @@ class MainActivity : Activity() {
             append("חבילות רשת שנצפו: ").append(prefs.getInt("packets_seen", 0)).append("\n")
             append("שאילתות DNS שנצפו: ").append(prefs.getInt("dns_queries_seen", 0)).append("\n")
             append("תשובות DNS שהתקבלו: ").append(prefs.getInt("dns_responses_received", 0)).append("\n")
+            append("פסקי זמן של DNS: ").append(prefs.getInt("dns_timeouts", 0)).append("\n")
+            append("שגיאות DNS: ").append(prefs.getInt("dns_errors", 0)).append("\n")
+            append("מנות שלא זוהו כ־IPv4 UDP DNS: ").append(prefs.getInt("packets_ignored", 0)).append("\n")
+            append("שאילתות DNS אחרונות שנכשלו: ").append(prefs.getString("last_dns_error", "לא תועד") ?: "לא תועד").append("\n")
+            append("זמן שגיאת DNS אחרונה: ").append(time("last_dns_error_time")).append("\n")
+            append("שרת DNS מסנן מוגדר בקוד: 185.228.168.168:53 (CleanBrowsing Family Filter)\n")
+            append("הערת כיסוי: הגרסה הנוכחית מתעדת טיפול ב־IPv4/UDP DNS בלבד; TCP DNS, IPv6 ו־DNS מוצפן אינם מסוננים באופן מלא.\n")
             append("שאילתת DNS אחרונה: ").append(time("last_dns_query")).append("\n")
             append("תשובת DNS אחרונה: ").append(time("last_dns_response")).append("\n")
             append("עצירה אחרונה: ").append(time("last_stop")).append("\n")
