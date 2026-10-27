@@ -31,8 +31,18 @@ class SafeGuardVpnService : VpnService() {
     private var floatingIcon: ImageView? = null
     private var windowManager: WindowManager? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        diagnostics.edit().putLong("last_service_create", System.currentTimeMillis())
+            .putString("last_service_lifecycle_event", "onCreate").apply()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        diagnostics.edit().putLong("last_start", System.currentTimeMillis()).apply()
+        diagnostics.edit().putLong("last_start", System.currentTimeMillis())
+            .putLong("last_on_start_command", System.currentTimeMillis())
+            .putInt("last_start_id", startId)
+            .putString("last_start_flags", "flags=$flags, startId=$startId, intentNull=${intent == null}")
+            .putString("last_service_lifecycle_event", "onStartCommand").apply()
         startForeground(7401, notification("מנסה להתחבר ל־VPN"))
         showFloatingIconIfAllowed()
         // START_STICKY may recreate the service with a null intent. Do not trust
@@ -153,10 +163,15 @@ class SafeGuardVpnService : VpnService() {
                 } else {
                     startService(restartIntent)
                 }
+                diagnostics.edit()
+                    .putString("last_task_recovery_result", "בקשת startService נשלחה; הצלחת VPN בפועל טרם אומתה")
+                    .apply()
             } catch (error: Exception) {
                 diagnostics.edit()
                     .putLong("last_error_time", System.currentTimeMillis())
-                    .putString("last_error", "בקשת שחזור אחרי הסרה נכשלה: ${error.javaClass.simpleName}: ${error.message ?: "ללא פרטים"}")
+                    .putString("last_error", "בקשת שחזור אחרי הסרה נכשלה: ${error.javaClass.name}: ${error.message ?: "ללא פרטים"}")
+                    .putString("last_error_stack", error.stackTraceToString().take(6000))
+                    .putString("last_task_recovery_result", "נכשלה: ${error.javaClass.simpleName}: ${error.message ?: "ללא פרטים"}")
                     .putString("vpn_state", "בקשת שחזור עובד VPN נכשלה")
                     .apply()
             }
@@ -166,6 +181,9 @@ class SafeGuardVpnService : VpnService() {
 
     override fun onDestroy() {
         diagnostics.edit().putLong("last_service_destroy", System.currentTimeMillis())
+            .putString("last_service_lifecycle_event", "onDestroy")
+            .putBoolean("last_worker_thread_alive", worker?.isAlive == true)
+            .putBoolean("last_tun_valid", try { tun?.fileDescriptor?.valid() == true } catch (_: Exception) { false })
             .putBoolean("vpn_worker_running", false)
             .putString("vpn_state", "Android סיים את השירות; סוגר חיבור ותהליך עבודה").apply()
         // Closing TUN unblocks the reader if Android destroys this service instance.
@@ -211,7 +229,11 @@ class SafeGuardVpnService : VpnService() {
                 if (running.get()) {
                     updateNotification("אין חיבור VPN — מנסה להתחבר מחדש")
                     diagnostics.edit().putLong("last_error_time", System.currentTimeMillis())
-                        .putString("last_error", "${error.javaClass.simpleName}: ${error.message ?: "ללא פרטים"}")
+                        .putString("last_error", "${error.javaClass.name}: ${error.message ?: "ללא פרטים"}")
+                        .putString("last_error_stack", error.stackTraceToString().take(6000))
+                        .putString("last_service_lifecycle_event", "vpn_worker_exception")
+                        .putBoolean("last_worker_thread_alive", Thread.currentThread().isAlive)
+                        .putBoolean("last_tun_valid", try { tun?.fileDescriptor?.valid() == true } catch (_: Exception) { false })
                         .putString("vpn_state", "שגיאה בחיבור/עיבוד VPN; מנסה להתחבר מחדש").apply()
                 }
             } finally {
@@ -228,6 +250,10 @@ class SafeGuardVpnService : VpnService() {
             }
         }
         diagnostics.edit().putLong("last_stop", System.currentTimeMillis())
+            .putLong("last_worker_exit", System.currentTimeMillis())
+            .putString("last_worker_exit_reason", if (running.get()) "לולאת VPN הסתיימה בזמן שדגל running עדיין true" else "דגל running הפך ל־false")
+            .putBoolean("last_worker_thread_alive", Thread.currentThread().isAlive)
+            .putBoolean("last_tun_valid", try { tun?.fileDescriptor?.valid() == true } catch (_: Exception) { false })
             .putBoolean("vpn_worker_running", false)
             .putString("vpn_state", "לולאת VPN הסתיימה").apply()
         updateNotification("הסינון נעצר")
