@@ -243,9 +243,20 @@ class SafeGuardVpnService : VpnService() {
 
             // נסה להתחבר מחדש במקום לכבות את ההגנה לאחר שגיאה זמנית.
             if (running.get()) {
-                try { Thread.sleep(2000) } catch (_: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    break
+                try {
+                    Thread.sleep(2000)
+                } catch (_: InterruptedException) {
+                    // An interrupt can arrive during task-removal/recovery while the
+                    // service is still supposed to protect the device. Do not exit the
+                    // VPN worker in that case: onTaskRemoved may already have queued a
+                    // restart, and stopSelf() from this old worker could cancel it.
+                    if (!running.get()) break
+                    diagnostics.edit()
+                        .putLong("last_worker_interrupted", System.currentTimeMillis())
+                        .putString("last_worker_interrupt_note", "העובד הופרע בזמן שההגנה עדיין מבוקשת; ממשיך למחזור חיבור חדש")
+                        .putString("vpn_state", "התקבלה הפרעה זמנית; ממשיך לנסות להפעיל סינון")
+                        .apply()
+                    // InterruptedException clears the interrupt flag; loop and rebuild TUN.
                 }
             }
         }
