@@ -138,24 +138,26 @@ class SafeGuardVpnService : VpnService() {
             .putString("task_removed_snapshot", "workerAlive=" + workerAlive + ", tunOpen=" + tunOpen + ", running=" + running.get())
             .apply()
 
-        // If the task was removed after the worker had already died, recover inside
-        // the still-started service instead of leaving running=true with no worker.
-        // Do not create a second worker when an existing worker is still connecting.
-        if (!workerAlive && (!running.get() || worker?.isAlive != true)) {
+        // If the task is removed after the worker died, ask Android to deliver a
+        // fresh start to this foreground service. onStartCommand owns worker creation.
+        // Merely setting running=true is not enough when the previous worker is gone.
+        if (!workerAlive) {
             try {
-                running.set(true)
-                startForeground(7401, notification("מאתחל מחדש את הסינון"))
                 diagnostics.edit()
                     .putLong("last_task_recovery_attempt", System.currentTimeMillis())
-                    .putString("vpn_state", "מפעיל מחדש את עובד ה־VPN לאחר הסרת האפליקציה מהאחרונות")
+                    .putString("vpn_state", "מבקש הפעלה מחדש של שירות ה־VPN לאחר הסרת האפליקציה")
                     .apply()
-                worker = thread(name = "SafeGuard-DNS-recovery") { runVpn() }
+                val restartIntent = Intent(this, SafeGuardVpnService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(restartIntent)
+                } else {
+                    startService(restartIntent)
+                }
             } catch (error: Exception) {
-                running.set(false)
                 diagnostics.edit()
                     .putLong("last_error_time", System.currentTimeMillis())
-                    .putString("last_error", "שחזור אחרי הסרה מהאחרונות נכשל: ${error.javaClass.simpleName}: ${error.message ?: "ללא פרטים"}")
-                    .putString("vpn_state", "שחזור עובד VPN נכשל")
+                    .putString("last_error", "בקשת שחזור אחרי הסרה נכשלה: ${error.javaClass.simpleName}: ${error.message ?: "ללא פרטים"}")
+                    .putString("vpn_state", "בקשת שחזור עובד VPN נכשלה")
                     .apply()
             }
         }
