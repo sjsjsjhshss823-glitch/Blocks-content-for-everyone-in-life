@@ -53,7 +53,10 @@ class SafeGuardVpnService : VpnService() {
         // workers while allowing a dead worker to be restarted.
         val currentWorker = worker
         val workerReportedActive = diagnostics.getBoolean("vpn_worker_running", false)
-        if (currentWorker?.isAlive == true && running.get() && workerReportedActive) {
+        // A live thread and a stale diagnostic flag are not enough: the TUN descriptor
+        // must still be valid before we report the VPN worker as active.
+        val tunIsValid = try { tun?.fileDescriptor?.valid() == true } catch (_: Exception) { false }
+        if (currentWorker?.isAlive == true && running.get() && workerReportedActive && tunIsValid) {
             diagnostics.edit().putLong("last_duplicate_start", System.currentTimeMillis())
                 .putString("vpn_state", "התקבלה בקשת הפעלה; עובד VPN פעיל לפי בדיקת השירות").apply()
         } else {
@@ -70,19 +73,25 @@ class SafeGuardVpnService : VpnService() {
                 .putBoolean("vpn_worker_running", false)
                 .putString("vpn_state", "מאתחל עובד VPN; מוודא שעובד קודם הסתיים")
                 .apply()
-            worker = thread(name = "SafeGuard-Worker-Recovery") {
+            val recoveryWorker = thread(start = false, name = "SafeGuard-Worker-Recovery") {
                 try { currentWorker?.join(3000) } catch (_: InterruptedException) {}
                 synchronized(this) {
-                    if (worker?.name == "SafeGuard-Worker-Recovery" && currentWorker?.isAlive != true) {
+                    if (worker === Thread.currentThread() && currentWorker?.isAlive != true) {
                         running.set(true)
-                        worker = thread(name = "SafeGuard-DNS") { runVpn(startId) }
+                        val newWorker = thread(start = false, name = "SafeGuard-DNS") { runVpn(startId) }
+                        worker = newWorker
+                        newWorker.start()
                     } else {
                         diagnostics.edit()
-                            .putString("vpn_state", "שחזור נדחה: עובד אחר כבר הוקם")
+                            .putString("vpn_state", "שחזור נדחה: עובד אחר כבר הוקם או שהעובד הקודם עדיין חי")
                             .apply()
                     }
                 }
             }
+            // Publish the recovery thread before starting it; otherwise it can run
+            // and inspect worker before the assignment above has taken effect.
+            worker = recoveryWorker
+            recoveryWorker.start()
         }
         return START_STICKY
     }
