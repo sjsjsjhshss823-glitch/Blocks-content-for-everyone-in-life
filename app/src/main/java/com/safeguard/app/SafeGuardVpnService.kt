@@ -51,18 +51,38 @@ class SafeGuardVpnService : VpnService() {
         // the running flag alone: it can be stale if a worker exited unexpectedly.
         // Service callbacks run on the main thread, so this check prevents duplicate
         // workers while allowing a dead worker to be restarted.
-        if (worker?.isAlive != true) {
-            running.set(true)
+        val currentWorker = worker
+        val workerReportedActive = diagnostics.getBoolean("vpn_worker_running", false)
+        if (currentWorker?.isAlive == true && running.get() && workerReportedActive) {
+            diagnostics.edit().putLong("last_duplicate_start", System.currentTimeMillis())
+                .putString("vpn_state", "התקבלה בקשת הפעלה; עובד VPN פעיל לפי בדיקת השירות").apply()
+        } else {
+            // Do not mistake a thread that is merely still alive during teardown for
+            // a functioning VPN worker. Close TUN to unblock a stale reader, then
+            // wait off the main thread for the old worker to finish before replacing it.
+            running.set(false)
+            try { tun?.close() } catch (_: Exception) {}
+            currentWorker?.interrupt()
             diagnostics.edit()
+                .putLong("last_worker_recovery_attempt", System.currentTimeMillis())
                 .putLong("last_worker_launch", System.currentTimeMillis())
                 .putString("worker_launch_reason", if (intent == null) "START_STICKY עם intent ריק" else "בקשת הפעלה של השירות")
                 .putBoolean("vpn_worker_running", false)
-                .putString("vpn_state", "עובד VPN מתחיל לפעול")
+                .putString("vpn_state", "מאתחל עובד VPN; מוודא שעובד קודם הסתיים")
                 .apply()
-            worker = thread(name = "SafeGuard-DNS") { runVpn() }
-        } else {
-            diagnostics.edit().putLong("last_duplicate_start", System.currentTimeMillis())
-                .putString("vpn_state", "התקבלה בקשת הפעלה; עובד VPN כבר פעיל").apply()
+            worker = thread(name = "SafeGuard-Worker-Recovery") {
+                try { currentWorker?.join(3000) } catch (_: InterruptedException) {}
+                synchronized(this) {
+                    if (worker === currentWorker || worker?.isAlive != true) {
+                        running.set(true)
+                        worker = thread(name = "SafeGuard-DNS") { runVpn() }
+                    } else {
+                        diagnostics.edit()
+                            .putString("vpn_state", "שחזור נדחה: עובד אחר כבר הוקם")
+                            .apply()
+                    }
+                }
+            }
         }
         return START_STICKY
     }
