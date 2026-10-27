@@ -45,7 +45,26 @@ class SafeGuardVpnService : VpnService() {
             .putInt("last_start_id", startId)
             .putString("last_start_flags", "flags=$flags, startId=$startId, intentNull=${intent == null}")
             .putString("last_service_lifecycle_event", "onStartCommand").apply()
-        startForeground(7401, notification("מנסה להתחבר ל־VPN"))
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    7401,
+                    notification("מתחבר ל־VPN; הסינון טרם אומת"),
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED
+                )
+            } else {
+                startForeground(7401, notification("מתחבר ל־VPN; הסינון טרם אומת"))
+            }
+        } catch (error: Exception) {
+            diagnostics.edit()
+                .putLong("last_error_time", System.currentTimeMillis())
+                .putString("last_error", "הפעלת Foreground Service נכשלה: ${error.javaClass.simpleName}: ${error.message ?: "ללא פרטים"}")
+                .putString("vpn_state", "הפעלת השירות הקדמי נכשלה; הסינון אינו פעיל")
+                .putBoolean("vpn_worker_running", false)
+                .apply()
+            stopSelfResult(startId)
+            return START_NOT_STICKY
+        }
         showFloatingIconIfAllowed()
         // START_STICKY may recreate the service with a null intent. Do not trust
         // the running flag alone: it can be stale if a worker exited unexpectedly.
@@ -171,18 +190,19 @@ class SafeGuardVpnService : VpnService() {
         // Keep vpn_state intact; it describes the VPN worker, not the activity task.
         val workerAlive = worker?.isAlive == true
         val tunOpen = try { tun?.fileDescriptor?.valid() == true } catch (_: Exception) { false }
+        val workerReportedActive = diagnostics.getBoolean("vpn_worker_running", false)
+        val healthyAtTaskRemoval = workerAlive && tunOpen && running.get() && workerReportedActive
         diagnostics.edit()
             .putLong("last_task_removed", System.currentTimeMillis())
             .putString("last_task_removed_note", "SafeGuard הוסר ממסך האפליקציות האחרונות")
             .putBoolean("worker_alive_at_task_removed", workerAlive)
             .putBoolean("tun_open_at_task_removed", tunOpen)
-            .putString("task_removed_snapshot", "workerAlive=" + workerAlive + ", tunOpen=" + tunOpen + ", running=" + running.get())
+            .putString("task_removed_snapshot", "workerAlive=" + workerAlive + ", tunOpen=" + tunOpen + ", running=" + running.get() + ", workerReportedActive=" + workerReportedActive)
             .apply()
 
-        // If the task is removed after the worker died, ask Android to deliver a
-        // fresh start to this foreground service. onStartCommand owns worker creation.
-        // Merely setting running=true is not enough when the previous worker is gone.
-        if (!workerAlive) {
+        // Trigger the existing recovery path if any health signal is false,
+        // not only when the worker thread has completely died.
+        if (!healthyAtTaskRemoval) {
             try {
                 diagnostics.edit()
                     .putLong("last_task_recovery_attempt", System.currentTimeMillis())
@@ -228,83 +248,107 @@ class SafeGuardVpnService : VpnService() {
     }
 
     private fun runVpn(workerStartId: Int) {
-        while (running.get()) {
+        val thisWorker = Thread.currentThread()
+        while (running.get() && !thisWorker.isInterrupted) {
+            var thisTun: ParcelFileDescriptor? = null
             try {
                 diagnostics.edit().putString("vpn_state", "מנסה ליצור חיבור VPN מול Android")
-                    .putLong("last_establish_attempt", System.currentTimeMillis()).apply()
-                tun = Builder()
+                    .putLong("last_establish_attempt", System.currentTimeMillis())
+                    .putBoolean("vpn_worker_running", false)
+                    .apply()
+                thisTun = Builder()
                     .setSession("SafeGuard")
                     .setMtu(1500)
                     .addAddress("10.111.222.2", 32)
                     .addDnsServer("10.111.222.1")
                     .addRoute("10.111.222.1", 32)
                     .establish()
-                val fd = tun ?: throw IllegalStateException("Android לא אישר יצירת חיבור VPN (Builder.establish החזיר null)")
+                    ?: throw IllegalStateException("Android לא אישר יצירת חיבור VPN (Builder.establish החזיר null)")
+                tun = thisTun
+                val fd = thisTun
+                val tunValid = try { fd.fileDescriptor.valid() } catch (_: Exception) { false }
+                if (!running.get() || !tunValid) {
+                    throw IllegalStateException("חיבור TUN לא תקף לאחר יצירתו")
+                }
                 diagnostics.edit().putLong("last_establish_success", System.currentTimeMillis())
-                    .putString("vpn_state", "חיבור TUN הוקם; ממתין לתעבורת DNS")
+                    .putString("vpn_state", "חיבור TUN הוקם; ממתין לאימות תעבורה")
+                    .putBoolean("last_tun_valid", true)
                     .putBoolean("vpn_worker_running", true).apply()
-                updateNotification("סינון פעיל")
+                updateNotification("VPN מחובר — ממתין לאימות תעבורה")
                 val input = FileInputStream(fd.fileDescriptor)
                 val output = FileOutputStream(fd.fileDescriptor)
                 val packetBuffer = ByteArray(32767)
-                while (running.get()) {
+                while (running.get() && !thisWorker.isInterrupted) {
                     val length = input.read(packetBuffer)
                     if (length <= 0) continue
+                    val stillValid = try { fd.fileDescriptor.valid() } catch (_: Exception) { false }
+                    if (!stillValid || !running.get()) {
+                        throw IllegalStateException("חיבור TUN נסגר בזמן עיבוד תעבורה")
+                    }
                     diagnostics.edit().putLong("last_heartbeat", System.currentTimeMillis())
                         .putLong("last_packet_time", System.currentTimeMillis())
-                        .putInt("packets_seen", diagnostics.getInt("packets_seen", 0) + 1).apply()
+                        .putInt("packets_seen", diagnostics.getInt("packets_seen", 0) + 1)
+                        .putBoolean("vpn_worker_running", true)
+                        .putBoolean("last_tun_valid", true)
+                        .putString("vpn_state", "עובד הסינון פעיל; התקבלה תעבורה דרך TUN")
+                        .apply()
+                    updateNotification("סינון פעיל")
                     val response = processDnsPacket(packetBuffer.copyOf(length))
                     if (response != null) synchronized(output) { output.write(response) }
                 }
             } catch (error: Exception) {
-                if (running.get()) {
-                    updateNotification("אין חיבור VPN — מנסה להתחבר מחדש")
+                if (running.get() && worker === thisWorker) {
+                    updateNotification("הסינון אינו מאומת — מנסה להתחבר מחדש")
                     diagnostics.edit().putLong("last_error_time", System.currentTimeMillis())
                         .putString("last_error", "${error.javaClass.name}: ${error.message ?: "ללא פרטים"}")
                         .putString("last_error_stack", error.stackTraceToString().take(6000))
                         .putString("last_service_lifecycle_event", "vpn_worker_exception")
-                        .putBoolean("last_worker_thread_alive", Thread.currentThread().isAlive)
-                        .putBoolean("last_tun_valid", try { tun?.fileDescriptor?.valid() == true } catch (_: Exception) { false })
-                        .putString("vpn_state", "שגיאה בחיבור/עיבוד VPN; מנסה להתחבר מחדש").apply()
+                        .putBoolean("last_worker_thread_alive", thisWorker.isAlive)
+                        .putBoolean("last_tun_valid", try { thisTun?.fileDescriptor?.valid() == true } catch (_: Exception) { false })
+                        .putBoolean("vpn_worker_running", false)
+                        .putString("vpn_state", "שגיאה בחיבור/עיבוד VPN; הסינון אינו מאומת")
+                        .apply()
                 }
             } finally {
-                try { tun?.close() } catch (_: Exception) {}
-                tun = null
+                try { thisTun?.close() } catch (_: Exception) {}
+                if (tun === thisTun) tun = null
             }
 
-            // נסה להתחבר מחדש במקום לכבות את ההגנה לאחר שגיאה זמנית.
-            if (running.get()) {
+            if (running.get() && !thisWorker.isInterrupted) {
                 try {
                     Thread.sleep(2000)
                 } catch (_: InterruptedException) {
-                    // An interrupt can arrive during task-removal/recovery while the
-                    // service is still supposed to protect the device. Do not exit the
-                    // VPN worker in that case: onTaskRemoved may already have queued a
-                    // restart, and stopSelf() from this old worker could cancel it.
                     if (!running.get()) break
                     diagnostics.edit()
                         .putLong("last_worker_interrupted", System.currentTimeMillis())
                         .putString("last_worker_interrupt_note", "העובד הופרע בזמן שההגנה עדיין מבוקשת; ממשיך למחזור חיבור חדש")
-                        .putString("vpn_state", "התקבלה הפרעה זמנית; ממשיך לנסות להפעיל סינון")
+                        .putString("vpn_state", "התקבלה הפרעה זמנית; מנסה להקים TUN מחדש")
                         .apply()
-                    // InterruptedException clears the interrupt flag; loop and rebuild TUN.
                 }
             }
         }
-        diagnostics.edit().putLong("last_stop", System.currentTimeMillis())
-            .putLong("last_worker_exit", System.currentTimeMillis())
-            .putString("last_worker_exit_reason", if (running.get()) "לולאת VPN הסתיימה בזמן שדגל running עדיין true" else "דגל running הפך ל־false")
-            .putBoolean("last_worker_thread_alive", Thread.currentThread().isAlive)
-            .putBoolean("last_tun_valid", try { tun?.fileDescriptor?.valid() == true } catch (_: Exception) { false })
-            .putBoolean("vpn_worker_running", false)
-            .putString("vpn_state", "לולאת VPN הסתיימה").apply()
-        updateNotification("הסינון נעצר")
-        running.set(false)
-        try { tun?.close() } catch (_: Exception) {}
-        tun = null
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        // Do not let an exiting worker stop a newer service start requested during recovery.
-        stopSelfResult(workerStartId)
+
+        // An old worker must never clear the state or stop the service after a
+        // recovery worker has replaced it.
+        synchronized(this) {
+            if (worker === thisWorker) {
+                diagnostics.edit().putLong("last_stop", System.currentTimeMillis())
+                    .putLong("last_worker_exit", System.currentTimeMillis())
+                    .putString("last_worker_exit_reason", if (running.get()) "לולאת VPN הסתיימה בזמן שדגל running עדיין true" else "דגל running הפך ל־false")
+                    .putBoolean("last_worker_thread_alive", false)
+                    .putBoolean("last_tun_valid", try { tun?.fileDescriptor?.valid() == true } catch (_: Exception) { false })
+                    .putBoolean("vpn_worker_running", false)
+                    .putString("vpn_state", "עובד VPN הסתיים; הסינון אינו מאומת")
+                    .apply()
+                worker = null
+                running.set(false)
+                try { tun?.close() } catch (_: Exception) {}
+                tun = null
+                updateNotification("הסינון נעצר — יש לפתוח את SafeGuard")
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelfResult(workerStartId)
+            }
+        }
     }
 
     private fun processDnsPacket(packet: ByteArray): ByteArray? {
