@@ -93,17 +93,46 @@ class SafeGuardVpnService : VpnService() {
                 .putString("vpn_state", "מאתחל עובד VPN; מוודא שעובד קודם הסתיים")
                 .apply()
             val recoveryWorker = thread(start = false, name = "SafeGuard-Worker-Recovery") {
-                try { currentWorker?.join(3000) } catch (_: InterruptedException) {}
+                // Closing a TUN descriptor should release a reader, but on some Android
+                // builds the old worker can take longer than a short fixed join timeout.
+                // Never abandon recovery while leaving a dead recovery thread in worker.
+                var waitedMs = 0
+                while (currentWorker?.isAlive == true && !Thread.currentThread().isInterrupted) {
+                    try { tun?.close() } catch (_: Exception) {}
+                    currentWorker.interrupt()
+                    try {
+                        currentWorker.join(500)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    }
+                    waitedMs += 500
+                    if (waitedMs > 0 && waitedMs % 5000 == 0) {
+                        diagnostics.edit()
+                            .putLong("last_worker_recovery_wait", System.currentTimeMillis())
+                            .putString("vpn_state", "ממתין לסיום עובד VPN ישן לפני הקמת TUN חדש")
+                            .putBoolean("vpn_worker_running", false)
+                            .putBoolean("last_tun_valid", false)
+                            .apply()
+                    }
+                }
                 synchronized(this) {
-                    if (worker === Thread.currentThread() && currentWorker?.isAlive != true) {
+                    if (worker === Thread.currentThread() &&
+                        currentWorker?.isAlive != true &&
+                        !Thread.currentThread().isInterrupted
+                    ) {
                         running.set(true)
                         val newWorker = thread(start = false, name = "SafeGuard-DNS") { runVpn(startId) }
                         worker = newWorker
                         newWorker.start()
-                    } else {
+                    } else if (worker === Thread.currentThread()) {
                         diagnostics.edit()
-                            .putString("vpn_state", "שחזור נדחה: עובד אחר כבר הוקם או שהעובד הקודם עדיין חי")
+                            .putLong("last_worker_recovery_failed", System.currentTimeMillis())
+                            .putString("vpn_state", "שחזור VPN הופסק לפני הקמת עובד חדש; הסינון אינו מאומת")
+                            .putBoolean("vpn_worker_running", false)
+                            .putBoolean("last_tun_valid", false)
                             .apply()
+                        worker = null
                     }
                 }
             }
