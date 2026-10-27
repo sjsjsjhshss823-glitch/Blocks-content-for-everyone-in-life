@@ -49,16 +49,37 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        // If the user previously granted VPN consent, opening SafeGuard should attempt
-        // to restore the foreground VPN service without requiring a second button tap.
-        if (VpnService.prepare(this) == null) {
-            try {
-                val serviceIntent = Intent(this, SafeGuardVpnService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(serviceIntent)
-                else startService(serviceIntent)
-            } catch (e: Exception) {
-                saveError("הפעלה מחדש של שירות VPN בפתיחת האפליקציה", e)
-            }
+        // Avoid sending a duplicate start request when the VPN is already known to be active.
+        if (VpnService.prepare(this) == null && !isVpnActuallyAndInternallyActive()) {
+            startVpnServiceSafely("שחזור VPN בפתיחת האפליקציה")
+        }
+    }
+
+    private fun isVpnActuallyAndInternallyActive(): Boolean {
+        val internalWorker = prefs.getBoolean("vpn_worker_running", false)
+        val systemVpnActive = try {
+            val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+            val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+            caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+        } catch (_: Exception) { false }
+        return internalWorker && systemVpnActive
+    }
+
+    private fun startVpnServiceSafely(reason: String) {
+        try {
+            val serviceIntent = Intent(this, SafeGuardVpnService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(serviceIntent)
+            else startService(serviceIntent)
+            prefs.edit().putLong("last_ui_vpn_start_request", System.currentTimeMillis())
+                .putString("last_ui_vpn_start_reason", reason)
+                .putString("last_ui_vpn_start_result", "בקשת הפעלת שירות נשלחה; יש לאמת שה־VPN התחבר").apply()
+            status.text = "נשלחה בקשת הפעלה של הסינון. ממתין לאימות חיבור VPN…"
+        } catch (e: Exception) {
+            prefs.edit().putLong("last_ui_vpn_start_request", System.currentTimeMillis())
+                .putString("last_ui_vpn_start_reason", reason)
+                .putString("last_ui_vpn_start_result", "נכשלה: ${e.javaClass.name}: ${e.message ?: "ללא פרטים"}").apply()
+            saveError(reason, e)
+            status.text = "לא ניתן להפעיל את שירות ה־VPN: ${e.javaClass.simpleName}: ${e.message ?: "ללא פרטים"}"
         }
     }
 
@@ -134,11 +155,28 @@ class MainActivity : Activity() {
     }
 
     private fun requestVpn() {
-        val intent = VpnService.prepare(this)
-        if (intent != null) startActivityForResult(intent, requestCode)
-        else {
-            startService(Intent(this, SafeGuardVpnService::class.java))
-            status.text = "בקשת VPN כבר אושרה"
+        // A repeated tap must be idempotent: do not re-request consent or restart an active VPN.
+        if (isVpnActuallyAndInternallyActive()) {
+            status.text = "הסינון כבר פעיל וחיבור ה־VPN מאומת. אין צורך ללחוץ שוב."
+            prefs.edit().putLong("last_duplicate_activate_tap", System.currentTimeMillis())
+                .putString("last_duplicate_activate_result", "לא בוצעה הפעלה נוספת; VPN פעיל").apply()
+            return
+        }
+        val intent = try { VpnService.prepare(this) } catch (e: Exception) {
+            saveError("בדיקת הרשאת VPN לפני הפעלה", e)
+            status.text = "לא ניתן לבדוק הרשאת VPN: ${e.javaClass.simpleName}: ${e.message ?: "ללא פרטים"}"
+            return
+        }
+        if (intent != null) {
+            try {
+                prefs.edit().putLong("last_vpn_consent_prompt", System.currentTimeMillis()).apply()
+                startActivityForResult(intent, requestCode)
+            } catch (e: Exception) {
+                saveError("פתיחת בקשת אישור VPN", e)
+                status.text = "לא ניתן לפתוח אישור VPN: ${e.javaClass.simpleName}: ${e.message ?: "ללא פרטים"}"
+            }
+        } else {
+            startVpnServiceSafely("לחיצה על הפעלת סינון")
         }
     }
 
@@ -290,6 +328,11 @@ class MainActivity : Activity() {
             append("Android מזהה כרגע חיבור VPN ברשת הפעילה: ").append(vpnTransportActive).append("\n")
             append("החרגה מאופטימיזציית סוללה: ").append(batteryOptimizationIgnored).append("\n")
             append("הפעלה אחרונה: ").append(time("last_start")).append("\n")
+            append("בקשת הפעלה אחרונה מהמסך: ").append(time("last_ui_vpn_start_request")).append("\n")
+            append("סיבת בקשת הפעלה מהמסך: ").append(prefs.getString("last_ui_vpn_start_reason", "לא תועד") ?: "לא תועד").append("\n")
+            append("תוצאת בקשת הפעלה מהמסך: ").append(prefs.getString("last_ui_vpn_start_result", "לא תועד") ?: "לא תועד").append("\n")
+            append("לחיצה כפולה אחרונה על הפעלת סינון: ").append(time("last_duplicate_activate_tap")).append("\n")
+            append("תוצאת טיפול בלחיצה כפולה: ").append(prefs.getString("last_duplicate_activate_result", "לא תועד") ?: "לא תועד").append("\n")
             append("הסרת האפליקציה מההיסטוריה: ").append(time("last_task_removed")).append("\n")
             append("סיום שירות אחרון: ").append(time("last_service_destroy")).append("\n")
             append("פעילות אחרונה: ").append(time("last_heartbeat")).append("\n")
@@ -354,8 +397,7 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         when (requestCode) {
             this.requestCode -> if (resultCode == RESULT_OK) {
-                startService(Intent(this, SafeGuardVpnService::class.java))
-                status.text = "ההגנה מתחילה לפעול"
+                startVpnServiceSafely("אישור משתמש לבקשת VPN")
             } else status.text = "יש לאשר את חיבור ה‑VPN להפעלת הסינון"
             adminRequestCode -> status.text = if (resultCode == RESULT_OK) "אישור ניהול המכשיר התקבל" else "אישור ניהול המכשיר לא התקבל"
         }
