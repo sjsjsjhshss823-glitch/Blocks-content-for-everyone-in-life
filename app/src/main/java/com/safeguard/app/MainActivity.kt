@@ -47,6 +47,21 @@ class MainActivity : Activity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // If the user previously granted VPN consent, opening SafeGuard should attempt
+        // to restore the foreground VPN service without requiring a second button tap.
+        if (VpnService.prepare(this) == null) {
+            try {
+                val serviceIntent = Intent(this, SafeGuardVpnService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(serviceIntent)
+                else startService(serviceIntent)
+            } catch (e: Exception) {
+                saveError("הפעלה מחדש של שירות VPN בפתיחת האפליקציה", e)
+            }
+        }
+    }
+
     private fun showMainScreen() {
         val scroll = ScrollView(this)
         val root = LinearLayout(this).apply {
@@ -85,7 +100,9 @@ class MainActivity : Activity() {
         }
         root.addView(status, match())
         addAction(root, "הפעלת סינון", "אישור חיבור VPN") { requestVpn() }
-        addAction(root, "שמירה על ההגנה ברקע", "VPN תמידי והגדרות סוללה") { showBackgroundProtectionOptions() }
+        addAction(root, "הגדרות VPN תמידי", "פתיחת הגדרות VPN להפעלת «VPN תמידי»") { openAlwaysOnVpnSettings() }
+        addAction(root, "אישור פעילות ברקע ללא הגבלת סוללה", "החרגת SafeGuard מחיסכון בסוללה") { requestBatteryExemption() }
+        addAction(root, "הפעלת סינון", "התחברות מחדש ל־VPN") { requestVpn() }
         addAction(root, "הפעלת סמל צף", "סמל שקוף מעל האפליקציות") { requestOverlayPermission() }
         addAction(root, "אישור ניהול מכשיר", "ניהול הרשאות מנהל") { requestDeviceAdmin() }
         addAction(root, "אישור נתוני שימוש", "פתיחת הרשאת גישה לנתוני שימוש") {
@@ -127,25 +144,22 @@ class MainActivity : Activity() {
     }
 
 
-    private fun showBackgroundProtectionOptions() {
-        AlertDialog.Builder(this)
-            .setTitle("שמירה על ההגנה")
-            .setMessage("כדי שהסינון ימשיך אחרי הסרת SafeGuard ממסך האפליקציות האחרונות, הפעילו VPN תמידי בהגדרות Android. אם המכשיר עדיין סוגר את השירות, אפשר גם לאפשר פעילות ללא הגבלת סוללה.")
-            .setPositiveButton("הגדרות VPN") { _, _ ->
-                openSettings(Intent(Settings.ACTION_VPN_SETTINGS), "לא ניתן לפתוח את הגדרות VPN")
+    private fun openAlwaysOnVpnSettings() {
+        status.text = "בהגדרות VPN: לחצו על גלגל השיניים ליד SafeGuard והפעילו «VPN תמידי». Android לא מאפשר לאפליקציה רגילה לפתוח ישירות את מתג ה־VPN התמידי."
+        openSettings(Intent(Settings.ACTION_VPN_SETTINGS), "לא ניתן לפתוח את הגדרות VPN")
+    }
+
+    private fun requestBatteryExemption() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+            } catch (e: Exception) {
+                saveError("פתיחת הגדרות סוללה", e)
+                openSettings(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS), "לא ניתן לפתוח את הגדרות הסוללה")
             }
-            .setNeutralButton("הגדרות סוללה") { _, _ ->
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    try {
-                        startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
-                    } catch (e: Exception) {
-                        saveError("פתיחת הגדרות סוללה", e)
-                        openSettings(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS), "לא ניתן לפתוח את הגדרות הסוללה")
-                    }
-                } else status.text = "אין צורך בהרשאה זו בגרסת Android"
-            }
-            .setNegativeButton("סגירה", null)
-            .show()
+        } else {
+            status.text = "אין צורך בהרשאת סוללה מיוחדת בגרסת Android זו"
+        }
     }
 
     private fun requestDeviceAdmin() {
