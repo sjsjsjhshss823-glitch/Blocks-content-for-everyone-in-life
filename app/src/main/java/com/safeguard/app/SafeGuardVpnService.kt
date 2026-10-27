@@ -309,7 +309,12 @@ class SafeGuardVpnService : VpnService() {
                 val packetBuffer = ByteArray(32767)
                 while (running.get() && !thisWorker.isInterrupted) {
                     val length = input.read(packetBuffer)
-                    if (length <= 0) continue
+                    // A closed TUN can return EOF instead of throwing. Continuing on -1
+                    // spins forever with a dead interface and stale "worker alive" diagnostics.
+                    if (length < 0) {
+                        throw IllegalStateException("קריאת TUN הסתיימה (EOF); נדרש חיבור מחדש")
+                    }
+                    if (length == 0) continue
                     val stillValid = try { fd.fileDescriptor.valid() } catch (_: Exception) { false }
                     if (!stillValid || !running.get()) {
                         throw IllegalStateException("חיבור TUN נסגר בזמן עיבוד תעבורה")
