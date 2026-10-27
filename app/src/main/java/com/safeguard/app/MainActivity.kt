@@ -102,7 +102,6 @@ class MainActivity : Activity() {
         addAction(root, "הפעלת סינון", "אישור חיבור VPN") { requestVpn() }
         addAction(root, "הגדרות VPN תמידי", "פתיחת הגדרות VPN להפעלת «VPN תמידי»") { openAlwaysOnVpnSettings() }
         addAction(root, "אישור פעילות ברקע ללא הגבלת סוללה", "החרגת SafeGuard מחיסכון בסוללה") { requestBatteryExemption() }
-        addAction(root, "הפעלת סינון", "התחברות מחדש ל־VPN") { requestVpn() }
         addAction(root, "הפעלת סמל צף", "סמל שקוף מעל האפליקציות") { requestOverlayPermission() }
         addAction(root, "אישור ניהול מכשיר", "ניהול הרשאות מנהל") { requestDeviceAdmin() }
         addAction(root, "אישור נתוני שימוש", "פתיחת הרשאת גישה לנתוני שימוש") {
@@ -269,7 +268,15 @@ class MainActivity : Activity() {
             val versionCode = if (Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
             "${info.versionName ?: "לא ידוע"} (versionCode=$versionCode)"
         } catch (e: Exception) { "לא ניתן לקרוא גרסה: ${e.javaClass.simpleName}: ${e.message ?: "ללא פרטים"}" }
+        val serviceSnapshot = try {
+            val cm = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+            val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+            "vpnTransportActive=${caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true}"
+        } catch (e: Exception) { "snapshotError=${e.javaClass.simpleName}:${e.message ?: "no message"}" }
+        prefs.edit().putLong("last_report_created", System.currentTimeMillis())
+            .putString("last_report_network_snapshot", serviceSnapshot).apply()
         val report = buildString {
+            append("צילום מצב בעת יצירת הדוח: ").append(serviceSnapshot).append("\n")
             append("דוח אבחון SafeGuard\n")
             append("גרסת Android: ").append(Build.VERSION.RELEASE).append("\n")
             append("מכשיר: ").append(Build.MANUFACTURER).append(" ").append(Build.MODEL).append("\n")
@@ -289,6 +296,19 @@ class MainActivity : Activity() {
             append("ניסיון יצירת VPN אחרון: ").append(time("last_establish_attempt")).append("\n")
             append("הצלחת יצירת VPN אחרונה: ").append(time("last_establish_success")).append("\n")
             append("מצב VPN אחרון: ").append(prefs.getString("vpn_state", "לא תועד") ?: "לא תועד").append("\n")
+            append("סיבת הפעלה אחרונה: ").append(prefs.getString("worker_launch_reason", "לא תועד") ?: "לא תועד").append("\n")
+            append("מזהה startId אחרון: ").append(prefs.getInt("last_start_id", -1)).append("\n")
+            append("דגלי הפעלה אחרונים: ").append(prefs.getString("last_start_flags", "לא תועד") ?: "לא תועד").append("\n")
+            append("יצירת שירות אחרונה: ").append(time("last_service_create")).append("\n")
+            append("כניסה אחרונה ל־onStartCommand: ").append(time("last_on_start_command")).append("\n")
+            append("יציאת עובד אחרונה: ").append(time("last_worker_exit")).append("\n")
+            append("סיבת יציאת עובד: ").append(prefs.getString("last_worker_exit_reason", "לא תועד") ?: "לא תועד").append("\n")
+            append("ניסיון שחזור אחרי הסרה: ").append(time("last_task_recovery_attempt")).append("\n")
+            append("תוצאת בקשת שחזור: ").append(prefs.getString("last_task_recovery_result", "לא תועד") ?: "לא תועד").append("\n")
+            append("שגיאה אחרונה מלאה: ").append(prefs.getString("last_error_stack", "לא תועד") ?: "לא תועד").append("\n")
+            append("אירוע מחזור חיים אחרון: ").append(prefs.getString("last_service_lifecycle_event", "לא תועד") ?: "לא תועד").append("\n")
+            append("תהליך עובד חי לפי הבדיקה האחרונה: ").append(prefs.getBoolean("last_worker_thread_alive", false)).append("\n")
+            append("קובץ TUN תקף לפי הבדיקה האחרונה: ").append(prefs.getBoolean("last_tun_valid", false)).append("\n")
             append("מצב תהליך הסינון לפי הרישום: ").append(if (prefs.getBoolean("vpn_worker_running", false)) "מסומן כפועל" else "לא מסומן כפועל").append("\n")
             append("תהליך הסינון היה פעיל בעת הסרה מהאחרונות: ").append(prefs.getBoolean("worker_alive_at_task_removed", false)).append("\n")
             append("חיבור TUN היה פתוח בעת הסרה מהאחרונות: ").append(prefs.getBoolean("tun_open_at_task_removed", false)).append("\n")
