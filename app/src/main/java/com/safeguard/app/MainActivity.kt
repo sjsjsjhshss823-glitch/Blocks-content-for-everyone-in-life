@@ -73,13 +73,17 @@ class MainActivity : Activity() {
             prefs.edit().putLong("last_ui_vpn_start_request", System.currentTimeMillis())
                 .putString("last_ui_vpn_start_reason", reason)
                 .putString("last_ui_vpn_start_result", "בקשת הפעלת שירות נשלחה; יש לאמת שה־VPN התחבר").apply()
-            status.text = "נשלחה בקשת הפעלה של הסינון. ממתין לאימות חיבור VPN…"
+            if (::status.isInitialized) {
+                status.text = "נשלחה בקשת הפעלה של הסינון. ממתין לאימות חיבור VPN…"
+            }
         } catch (e: Exception) {
             prefs.edit().putLong("last_ui_vpn_start_request", System.currentTimeMillis())
                 .putString("last_ui_vpn_start_reason", reason)
                 .putString("last_ui_vpn_start_result", "נכשלה: ${e.javaClass.name}: ${e.message ?: "ללא פרטים"}").apply()
             saveError(reason, e)
-            status.text = "לא ניתן להפעיל את שירות ה־VPN: ${e.javaClass.simpleName}: ${e.message ?: "ללא פרטים"}"
+            if (::status.isInitialized) {
+                status.text = "לא ניתן להפעיל את שירות ה־VPN: ${e.javaClass.simpleName}: ${e.message ?: "ללא פרטים"}"
+            }
         }
     }
 
