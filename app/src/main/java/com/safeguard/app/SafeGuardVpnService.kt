@@ -24,6 +24,7 @@ class SafeGuardVpnService : VpnService() {
     private var tun: ParcelFileDescriptor? = null
     private val running = AtomicBoolean(false)
     @Volatile private var worker: Thread? = null
+    @Volatile private var latestStartId: Int = 0
     private val dnsAddress = byteArrayOf(10, 111, 222.toByte(), 1)
     private val upstreamAddress = byteArrayOf(185.toByte(), 228.toByte(), 168.toByte(), 168.toByte())
 
@@ -38,6 +39,7 @@ class SafeGuardVpnService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        latestStartId = startId
         diagnostics.edit().putLong("last_start", System.currentTimeMillis())
             .putLong("last_on_start_command", System.currentTimeMillis())
             .putInt("last_start_id", startId)
@@ -272,7 +274,8 @@ class SafeGuardVpnService : VpnService() {
         try { tun?.close() } catch (_: Exception) {}
         tun = null
         stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        // Do not let an exiting worker stop a newer service start requested during recovery.
+        stopSelfResult(latestStartId)
     }
 
     private fun processDnsPacket(packet: ByteArray): ByteArray? {
