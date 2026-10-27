@@ -75,7 +75,7 @@ class SafeGuardVpnService : VpnService() {
                 synchronized(this) {
                     if (worker?.name == "SafeGuard-Worker-Recovery" && currentWorker?.isAlive != true) {
                         running.set(true)
-                        worker = thread(name = "SafeGuard-DNS") { runVpn() }
+                        worker = thread(name = "SafeGuard-DNS") { runVpn(startId) }
                     } else {
                         diagnostics.edit()
                             .putString("vpn_state", "שחזור נדחה: עובד אחר כבר הוקם")
@@ -218,7 +218,7 @@ class SafeGuardVpnService : VpnService() {
         super.onDestroy()
     }
 
-    private fun runVpn() {
+    private fun runVpn(workerStartId: Int) {
         while (running.get()) {
             try {
                 diagnostics.edit().putString("vpn_state", "מנסה ליצור חיבור VPN מול Android")
@@ -295,7 +295,7 @@ class SafeGuardVpnService : VpnService() {
         tun = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         // Do not let an exiting worker stop a newer service start requested during recovery.
-        stopSelfResult(latestStartId)
+        stopSelfResult(workerStartId)
     }
 
     private fun processDnsPacket(packet: ByteArray): ByteArray? {
