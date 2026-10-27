@@ -73,7 +73,7 @@ class SafeGuardVpnService : VpnService() {
             worker = thread(name = "SafeGuard-Worker-Recovery") {
                 try { currentWorker?.join(3000) } catch (_: InterruptedException) {}
                 synchronized(this) {
-                    if (worker === currentWorker || worker?.isAlive != true) {
+                    if (worker?.name == "SafeGuard-Worker-Recovery" && currentWorker?.isAlive != true) {
                         running.set(true)
                         worker = thread(name = "SafeGuard-DNS") { runVpn() }
                     } else {
